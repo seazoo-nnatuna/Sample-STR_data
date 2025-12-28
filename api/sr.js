@@ -1,54 +1,59 @@
 // api/sr.js
-export default async function handler(req, res) {
-  try {
-    // クエリ取得: /api/sr?uid=802982999&lang=jp
-    const uid = req.query.uid;
-    const lang = req.query.lang || "jp";
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-    if (!uid) {
-      return res.status(400).json({ error: "uid is required. e.g. /api/sr?uid=802982999" });
+async function fetchWithRetry(url, retries = 2) {
+  let lastErr;
+
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const resp = await fetch(url, { headers: { accept: "application/json" } });
+      if (resp.ok) return resp;
+
+      // 500系は混雑の可能性があるのでリトライ対象にする
+      if (resp.status >= 500 && resp.status <= 599 && i < retries) {
+        await sleep(500 * (i + 1)); // 0.5s, 1.0s...
+        continue;
+      }
+
+      return resp; // それ以外はそのまま返す
+    } catch (e) {
+      lastErr = e;
+      if (i < retries) {
+        await sleep(500 * (i + 1));
+        continue;
+      }
     }
+  }
 
-    // 外部APIへ（サーバー側で）アクセス
-    const url = `https://api.mihomo.me/sr_info_parsed/${encodeURIComponent(uid)}?lang=${encodeURIComponent(lang)}`;
+  throw lastErr || new Error("fetch failed");
+}
 
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        "accept": "application/json",
-      },
-    });
+export default async function handler(req, res) {
+  const uid = req.query.uid;
+  const lang = req.query.lang || "jp";
 
-    if (!response.ok) {
-      // 外部APIのエラーを分かりやすく返す
-      const text = await response.text().catch(() => "");
-      return res.status(response.status).json({
+  if (!uid) return res.status(400).json({ error: "uid is required" });
+
+  const url = `https://api.mihomo.me/sr_info_parsed/${encodeURIComponent(uid)}?lang=${encodeURIComponent(lang)}`;
+
+  try {
+    const upstream = await fetchWithRetry(url, 2);
+
+    if (!upstream.ok) {
+      const text = await upstream.text().catch(() => "");
+      return res.status(upstream.status).json({
         error: "Upstream API error",
-        status: response.status,
-        body: text.slice(0, 500),
+        status: upstream.status,
+        body: text,
       });
     }
 
-    const data = await response.json();
-
-    // 例: “あなたのスコア計算” も API 側でやるならここでOK
-    // (characters[0].relics[0].level + 1) / 16 * 50
-    const relicLevel = data?.characters?.[0]?.relics?.[0]?.level;
-    const score =
-      typeof relicLevel === "number" ? (((relicLevel + 1) / 16) * 50).toFixed(1) : null;
-
-    // フロントへ返す
-    return res.status(200).json({
-      uid,
-      lang,
-      score,
-      character0: data?.characters?.[0] ?? null,
-      raw: data, // 必要なら。重いなら消してOK
-    });
-  } catch (err) {
-    return res.status(500).json({
-      error: "Internal Server Error",
-      message: err?.message || String(err),
+    const data = await upstream.json();
+    return res.status(200).json(data);
+  } catch (e) {
+    return res.status(502).json({
+      error: "Upstream fetch failed",
+      message: e?.message || String(e),
     });
   }
 }
