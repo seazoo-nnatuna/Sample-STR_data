@@ -1,4 +1,3 @@
-// app.js
 const btn = document.getElementById("fetch-btn");
 const result = document.getElementById("result");
 
@@ -9,11 +8,9 @@ btn.addEventListener("click", async () => {
     const res = await fetch("/api/external-data");
     const json = await res.json();
 
-    // Express で返していた JSON と同じものが入る
     result.textContent = JSON.stringify(json, null, 2);
-
   } catch (e) {
-    result.textContent = "エラーが発生しました";
+    result.textContent = `表示エラー: ${e.message}`;
     console.error(e);
   }
 });
